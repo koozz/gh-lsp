@@ -1,0 +1,23 @@
+---
+name: release
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install zig
+        run: sudo snap install zig --classic --beta
+      - name: Build extension
+        uses: cli/gh-extension-precompile@v2
+        with:
+          build_script_override: "script/build.sh"

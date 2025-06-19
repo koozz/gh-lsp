@@ -1,0 +1,19 @@
+---
+name: triage
+on: [pull_request]
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install the language server
+        run: brew install zls
+      - name: Install gh-lsp (from repository)
+        run: gh extensions install .
+      - name: Run gh-lsp
+        env:
+          GH_LSP_SERVER: zls
+        run: gh lsp src/main.zig
+        timeout-minutes: 1

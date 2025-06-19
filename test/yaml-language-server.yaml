@@ -1,0 +1,9 @@
+---
+# yaml-language-server: $schema=./yaml-language-server.schema.json
+# This file is used to test the YAML language server with various scenarios.
+# It includes examples of correct and incorrect YAML syntax.
+config:
+  schema:
+    says: no
+  here-comes:
+   something really wrong
