@@ -4,7 +4,7 @@ const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 
 // Replace with @import("build.zig.zon").version when available
-const client_version = "0.1.1";
+const client_version = "0.1.2";
 
 var message_id: i64 = 1;
 
