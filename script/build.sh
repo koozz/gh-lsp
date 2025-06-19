@@ -18,7 +18,7 @@
 		fi
 		for arch in aarch64 x86_64; do
 			echo "Building for $os/$arch"
-			zig build -Dtarget=$arch-$os && cp "./zig-out/bin/gh-lsp${ext}" "./dist/${os}-${arch}${ext}"
+			zig build -Dtarget=$arch-$os && cp "./zig-out/bin/gh-lsp${ext}" "./dist/gh-lsp-${os}-${arch}${ext}"
 		done
 	done
 	echo "Built following files:"
