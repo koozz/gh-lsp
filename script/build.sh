@@ -7,21 +7,23 @@
 	cd "$(git rev-parse --show-toplevel)" || exit 1
 	mkdir -p dist
 
+	echo "Building aarch64-macos"
 	zig build -Dtarget=aarch64-macos
 	cp "./zig-out/bin/gh-lsp" "./dist/gh-lsp-darwin-arm64"
 
+	echo "Building x86_64-macos"
 	zig build -Dtarget=x86_64-macos
 	cp "./zig-out/bin/gh-lsp" "./dist/gh-lsp-darwin-amd64"
 
+	echo "Building aarch64-linux"
 	zig build -Dtarget=aarch64-linux
 	cp "./zig-out/bin/gh-lsp" "./dist/gh-lsp-linux-arm64"
 
+	echo "Building x86_64-linux"
 	zig build -Dtarget=x86_64-linux
 	cp "./zig-out/bin/gh-lsp" "./dist/gh-lsp-linux-amd64"
 
-	zig build -Dtarget=aarch64-windows
-	cp "./zig-out/bin/gh-lsp" "./dist/gh-lsp-windows-arm"
-
+	echo "Building x86_64-windows"
 	zig build -Dtarget=x86_64-windows
 	cp "./zig-out/bin/gh-lsp" "./dist/gh-lsp-windows-amd64"
 
