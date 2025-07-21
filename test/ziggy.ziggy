@@ -3,11 +3,11 @@
   .version = @v("1.0.0"),
   .license = @spdx("MIT"),
   .dependencies = {
-    "react": "next",
+    "react": next,
     "leftpad": "^1.0.0",
   },
   .repository = Git {
-    // "type" is now the struct name
+    "type": whoop! is now the struct name
     .url = "https://github.com",
   },
   .description =

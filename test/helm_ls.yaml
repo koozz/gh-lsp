@@ -1,0 +1,3 @@
+name: HelmLS test
+chart: proprietary
+version: v1

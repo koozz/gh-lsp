@@ -1,6 +1,6 @@
 .{
     .name = .gh_lsp,
-    .version = "0.1.3",
+    .version = "0.1.4",
     .fingerprint = 0x8bc5d4746034c26e,
     .minimum_zig_version = "0.14.0",
     .dependencies = .{},

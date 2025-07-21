@@ -52,15 +52,21 @@ Silencing the output is possible by redirect standard error to `/dev/null`:
 
 ## Language servers
 
-| `GH_LSP_SERVER`                | Diagnostics | Clean exit | Notes |
-|--------------------------------|-------------|------------|-------|
-| `bash-language-server start`   | No          | Yes        |       |
-| `biome lsp-proxy`              | No          | No         |       |
-| `vale-ls`                      | Yes         | No         |       |
-| `superhtml lsp`                | Yes         | Yes        |       |
-| `yaml-language-server --stdio` | Yes         | Yes        | Including JSON Schema validation |
-| `ziggy lsp`                    | No          | No         |       |
-| `zls`                          | Yes         | Yes        |       |
+| `GH_LSP_SERVER`                      | Diagnostics | Clean exit | Notes |
+|--------------------------------------|-------------|------------|-------|
+| `bash-language-server start`         | No          | Yes        | ❌    |
+| `biome lsp-proxy`                    | No          | No         | ❌    |
+| `gh-actions-language-server --stdio` | No          | No         | ❌    |
+| `helm_ls serve`                      | No          | No         | ❌    |
+| `lua-language-server`                | Yes         | Yes        | ✅    |
+| `marksman server`                    | No          | No         | ❌    |
+| `ruff server`                        | No          | No         | ❌    |
+| `vale-ls`                            | Yes         | No         | ❌    |
+| `superhtml lsp`                      | Yes         | Yes        | ✅    |
+| `typescript-language-server --stdio` | Yes         | Yes        | ✅    |
+| `yaml-language-server --stdio`       | Yes         | Yes        | ✅ Including JSON Schema validation |
+| `ziggy lsp`                          | No          | No         | ❌    |
+| `zls`                                | Yes         | Yes        | ✅    |
 
 ## Development
 

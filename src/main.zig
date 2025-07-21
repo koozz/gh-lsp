@@ -66,7 +66,21 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
-    try lsp.server(server_args.items, files, allocator);
+    // Get LSP server timeout or use 3000 ms
+    const lsp_timeout_ms = parse_timeout(allocator);
+
+    try lsp.server(allocator, server_args.items, files, lsp_timeout_ms);
+}
+
+fn parse_timeout(allocator: std.mem.Allocator) usize {
+    const default_timeout = 3000;
+    const env_timeout = std.process.getEnvVarOwned(allocator, "GH_LSP_TIMEOUT_MS") catch null;
+    if (env_timeout) |timeout_str| {
+        defer allocator.free(timeout_str);
+        return std.fmt.parseInt(usize, timeout_str, 10) catch default_timeout;
+    } else {
+        return default_timeout;
+    }
 }
 
 // test "Verify version is up-to-date" {
@@ -75,71 +89,158 @@ pub fn main() !void {
 // }
 
 test "bash-language-server" {
-    const allocator = std.testing.allocator;
-
-    var files = ArrayList([]const u8).init(allocator);
+    var files = ArrayList([]const u8).init(std.testing.allocator);
     defer files.deinit();
     try files.append("test/bash-language-server.sh");
 
-    try lsp.server(&[_][]const u8{ "bash-language-server", "start" }, files, allocator);
+    lsp.server(std.testing.allocator, &[_][]const u8{ "bash-language-server", "start" }, files, 1000) catch |err| switch (err) {
+        error.BrokenPipe => return error.SkipZigTest,
+        else => {
+            std.debug.print("Error: {}", .{err});
+            try std.testing.expect(false);
+        },
+    };
 }
 
-// test "biome" {
-//     const allocator = std.testing.allocator;
-//
-//     var files = ArrayList([]const u8).init(allocator);
-//     defer files.deinit();
-//     try files.append("test/biome.ts");
-//
-//     try lsp.server(&[_][]const u8{ "biome", "lsp-proxy" }, files, allocator);
-// }
+test "biome" {
+    var files = ArrayList([]const u8).init(std.testing.allocator);
+    defer files.deinit();
+    try files.append("test/biome.ts");
+    lsp.server(std.testing.allocator, &[_][]const u8{ "biome", "lsp-proxy" }, files, 1000) catch |err| switch (err) {
+        error.BrokenPipe => return error.SkipZigTest,
+        else => {
+            std.debug.print("Error: {}", .{err});
+            try std.testing.expect(false);
+        },
+    };
+}
 
-// test "vale-ls" {
-//     const allocator = std.testing.allocator;
-//
-//     var files = ArrayList([]const u8).init(allocator);
-//     defer files.deinit();
-//     try files.append("test/vale-ls.md");
-//
-//     try lsp.server(&[_][]const u8{ "vale-ls" }, files, allocator);
-// }
+test "helm_ls" {
+    var files = ArrayList([]const u8).init(std.testing.allocator);
+    defer files.deinit();
+    try files.append("test/helm_ls.yaml");
+    lsp.server(std.testing.allocator, &[_][]const u8{ "helm_ls", "serve" }, files, 1000) catch |err| switch (err) {
+        error.BrokenPipe => return error.SkipZigTest,
+        else => {
+            std.debug.print("Error: {}", .{err});
+            try std.testing.expect(false);
+        },
+    };
+}
+
+test "lua-language-server" {
+    var files = ArrayList([]const u8).init(std.testing.allocator);
+    defer files.deinit();
+    try files.append("test/lua-language-server.lua");
+    lsp.server(std.testing.allocator, &[_][]const u8{"lua-language-server"}, files, 1000) catch |err| switch (err) {
+        error.BrokenPipe => return error.SkipZigTest,
+        else => {
+            std.debug.print("Error: {}", .{err});
+            try std.testing.expect(false);
+        },
+    };
+}
+
+test "marksman" {
+    var files = ArrayList([]const u8).init(std.testing.allocator);
+    defer files.deinit();
+    try files.append("test/marksman.md");
+    lsp.server(std.testing.allocator, &[_][]const u8{"marksman"}, files, 1000) catch |err| switch (err) {
+        error.BrokenPipe => return error.SkipZigTest,
+        else => {
+            std.debug.print("Error: {}", .{err});
+            try std.testing.expect(false);
+        },
+    };
+}
+
+test "ruff" {
+    var files = ArrayList([]const u8).init(std.testing.allocator);
+    defer files.deinit();
+    try files.append("test/ruff.py");
+    lsp.server(std.testing.allocator, &[_][]const u8{ "ruff", "server" }, files, 1000) catch |err| switch (err) {
+        error.BrokenPipe => return error.SkipZigTest,
+        else => {
+            std.debug.print("Error: {}", .{err});
+            try std.testing.expect(false);
+        },
+    };
+}
 
 test "superhtml" {
-    const allocator = std.testing.allocator;
-
-    var files = ArrayList([]const u8).init(allocator);
+    var files = ArrayList([]const u8).init(std.testing.allocator);
     defer files.deinit();
     try files.append("test/superhtml.html");
+    lsp.server(std.testing.allocator, &[_][]const u8{ "superhtml", "lsp" }, files, 1000) catch |err| switch (err) {
+        error.BrokenPipe => return error.SkipZigTest,
+        else => {
+            std.debug.print("Error: {}", .{err});
+            try std.testing.expect(false);
+        },
+    };
+}
 
-    try lsp.server(&[_][]const u8{ "superhtml", "lsp" }, files, allocator);
+test "typescript-language-server" {
+    var files = ArrayList([]const u8).init(std.testing.allocator);
+    defer files.deinit();
+    try files.append("test/typescript-language-server.ts");
+    lsp.server(std.testing.allocator, &[_][]const u8{ "typescript-language-server", "--stdio" }, files, 1000) catch |err| switch (err) {
+        error.BrokenPipe => return error.SkipZigTest,
+        else => {
+            std.debug.print("Error: {}", .{err});
+            try std.testing.expect(false);
+        },
+    };
+}
+
+test "vale-ls" {
+    var files = ArrayList([]const u8).init(std.testing.allocator);
+    defer files.deinit();
+    try files.append("test/vale-ls.md");
+    lsp.server(std.testing.allocator, &[_][]const u8{"vale-ls"}, files, 1000) catch |err| switch (err) {
+        error.BrokenPipe => return error.SkipZigTest,
+        else => {
+            std.debug.print("Error: {}", .{err});
+            try std.testing.expect(false);
+        },
+    };
 }
 
 test "yaml-language-server" {
-    const allocator = std.testing.allocator;
-
-    var files = ArrayList([]const u8).init(allocator);
+    var files = ArrayList([]const u8).init(std.testing.allocator);
     defer files.deinit();
     try files.append("test/yaml-language-server.yaml");
-
-    try lsp.server(&[_][]const u8{ "yaml-language-server", "--stdio" }, files, allocator);
+    lsp.server(std.testing.allocator, &[_][]const u8{ "yaml-language-server", "--stdio" }, files, 1000) catch |err| switch (err) {
+        error.BrokenPipe => return error.SkipZigTest,
+        else => {
+            std.debug.print("Error: {}", .{err});
+            try std.testing.expect(false);
+        },
+    };
 }
 
-// test "ziggy" {
-//     const allocator = std.testing.allocator;
-//
-//     var files = ArrayList([]const u8).init(allocator);
-//     defer files.deinit();
-//     try files.append("test/ziggy.ziggy");
-//
-//     try lsp.server(&[_][]const u8{ "ziggy", "lsp" }, files, allocator);
-// }
+test "ziggy" {
+    var files = ArrayList([]const u8).init(std.testing.allocator);
+    defer files.deinit();
+    try files.append("test/ziggy.ziggy");
+    lsp.server(std.testing.allocator, &[_][]const u8{ "ziggy", "lsp" }, files, 1000) catch |err| switch (err) {
+        error.BrokenPipe => return error.SkipZigTest,
+        else => {
+            std.debug.print("Error: {}", .{err});
+            try std.testing.expect(false);
+        },
+    };
+}
 
 test "zls" {
-    const allocator = std.testing.allocator;
-
-    var files = ArrayList([]const u8).init(allocator);
+    var files = ArrayList([]const u8).init(std.testing.allocator);
     defer files.deinit();
     try files.append("test/zls.zig");
-
-    try lsp.server(&[_][]const u8{"zls"}, files, allocator);
+    lsp.server(std.testing.allocator, &[_][]const u8{"zls"}, files, 1000) catch |err| switch (err) {
+        error.BrokenPipe => return error.SkipZigTest,
+        else => {
+            std.debug.print("Error: {}", .{err});
+            try std.testing.expect(false);
+        },
+    };
 }

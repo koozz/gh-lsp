@@ -4,24 +4,23 @@ const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 
 // Replace with @import("build.zig.zon").version when available
-const client_version = "0.1.3";
+const client_version = "0.1.4";
 
-var message_id: i64 = 1;
+var message_id: isize = 1;
 
-const MessageContext = struct {
+const LspContext = struct {
     stdin: std.fs.File,
     stdout: std.fs.File,
     allocator: Allocator,
     files: ArrayList([]const u8),
-    server_capabilities: ?json.Value = null,
     initialized: bool = false,
-    diagnostics_supported: bool = false,
-    files_opened: u32 = 0,
-    diagnostics_received: u32 = 0,
-    should_exit: bool = false,
+    diagnostics_received: bool = false,
+    files_opened: usize = 0,
+    shutdown_requested: bool = false,
+    shutdown_id: isize = 0,
 };
 
-pub fn server(server_args: []const []const u8, files: ArrayList([]const u8), allocator: Allocator) !void {
+pub fn server(allocator: Allocator, server_args: []const []const u8, files: ArrayList([]const u8), timeout_ms: usize) !void {
     std.log.info("Spawning language server: {s}", .{server_args[0]});
 
     // Start the language server process
@@ -38,7 +37,7 @@ pub fn server(server_args: []const []const u8, files: ArrayList([]const u8), all
     }
 
     // Create message processing context
-    var context = MessageContext{
+    var context = LspContext{
         .stdin = process.stdin.?,
         .stdout = process.stdout.?,
         .allocator = allocator,
@@ -51,126 +50,162 @@ pub fn server(server_args: []const []const u8, files: ArrayList([]const u8), all
     // Send initialize request
     try sendInitialize(&context);
 
-    // Wait for processing to complete
+    // Prevent any hangups with a configurable timeout
+    const start = std.time.milliTimestamp();
+    while (!context.shutdown_requested) {
+        const elapsed = std.time.milliTimestamp() - start;
+        if (elapsed >= timeout_ms) {
+            std.log.debug("[CLIENT] Timeout reached, shutting down.", .{});
+            try sendShutdown(&context);
+            std.time.sleep(100 * std.time.ns_per_ms);
+            return error.Failure;
+        }
+        std.time.sleep(100 * std.time.ns_per_ms);
+    }
+
+    // Allow server to flush more diagnostics
     thread.join();
-
-    // Shutdown the server gracefully
-    try sendShutdown(&context);
-    try sendExit(&context);
-
-    // Wait for server to exit
-    _ = try process.wait();
 
     std.log.debug("Language server session completed", .{});
 }
 
-fn processMessages(context: *MessageContext) void {
-    var buffer: [16384]u8 = undefined;
+fn processMessages(context: *LspContext) void {
+    const JsonRPC = enum {
+        headers,
+        payload,
+    };
 
-    while (!context.should_exit) {
-        const parsed_message = readMessage(context.stdout, &buffer, context.allocator) catch |err| {
-            switch (err) {
-                error.EndOfStream => {
-                    std.log.info("Language server disconnected", .{});
-                    break;
+    var content_length: ?usize = null;
+    const reader = context.stdout.reader();
+    json_rpc: switch (JsonRPC.headers) {
+        .headers => {
+            // TODO: Check what a good single line header length buffer is
+            // The JSONRPC spec nor RFC7230 section 3.2 specifies a limit.
+            var buffer: [512]u8 = undefined;
+            const line = reader.readUntilDelimiterOrEof(&buffer, '\n') catch |err| switch (err) {
+                error.StreamTooLong => {
+                    std.log.info("Language server responded with a big header: {}", .{err});
+                    break :json_rpc;
                 },
                 else => {
-                    std.log.err("Error reading message: {}", .{err});
-                    break;
+                    std.log.info("Language server disconnected: {}", .{err});
+                    break :json_rpc;
                 },
+            };
+
+            if (line != null and std.mem.startsWith(u8, line.?, "Content-Length:")) {
+                const value_start = std.mem.indexOf(u8, line.?, ":").? + 1;
+                const value = std.mem.trim(u8, line.?[value_start..], " \r\n\t");
+                content_length = std.fmt.parseInt(usize, value, 10) catch null;
             }
-        };
-        defer parsed_message.deinit();
 
-        handleMessage(context, parsed_message.value) catch |err| {
-            std.log.err("Error handling message: {}", .{err});
-        };
+            if (line != null and line.?.len <= 1) { // Empty line or just \r
+                continue :json_rpc .payload;
+            } else {
+                continue :json_rpc .headers;
+            }
+        },
+        .payload => {
+            if (content_length) |buffer_length| {
+                const buffer = context.allocator.alloc(u8, buffer_length) catch |err| {
+                    std.log.info("Cannot allocate payload buffer: {}", .{err});
+                    break :json_rpc;
+                };
+                defer context.allocator.free(buffer);
+                const bytes_read = reader.readAll(buffer) catch |err| {
+                    std.log.info("Error reading payload buffer: {}", .{err});
+                    break :json_rpc;
+                };
+                if (bytes_read != content_length.?) {
+                    std.log.err("Payload content length mismatch.", .{});
+                    break :json_rpc;
+                }
+                const parsed_message = json.parseFromSlice(json.Value, context.allocator, buffer, .{}) catch |err| {
+                    std.log.err("Error parsing JSON payload: {}", .{err});
+                    break :json_rpc;
+                };
+                defer parsed_message.deinit();
 
-        // Check if we should exit (all diagnostics received)
-        if (context.initialized and
-            context.files_opened == context.files.items.len and
-            context.diagnostics_received >= context.files.items.len)
-        {
-            context.should_exit = true;
-        }
+                // TODO: handle async when possible, writergate?
+                handleMessage(context, parsed_message.value) catch |err| {
+                    if (err != error.Failure) {
+                        std.log.debug("Error handling message: {}", .{err});
+                    }
+                    break :json_rpc;
+                };
+                if (context.initialized and context.files_opened < context.files.items.len) {
+                    openAllFiles(context) catch |err| {
+                        std.log.err("Error opening files: {}", .{err});
+                        break :json_rpc;
+                    };
+                }
+                if (context.diagnostics_received and !context.shutdown_requested) {
+                    sendShutdown(context) catch |err| {
+                        std.log.err("Error gracefully shutting down server: {}", .{err});
+                        break :json_rpc;
+                    };
+                    context.shutdown_requested = true;
+                }
+                continue :json_rpc .headers;
+            }
+        },
     }
 }
 
-fn readMessage(stdout: std.fs.File, buffer: []u8, allocator: Allocator) !json.Parsed(json.Value) {
-    const reader = stdout.reader();
-
-    // Read headers
-    var content_length: ?usize = null;
-    while (true) {
-        const line = reader.readUntilDelimiterOrEof(buffer, '\n') catch |err| {
-            return err;
-        } orelse return error.EndOfStream;
-
-        if (line.len <= 1) { // Empty line or just \r
-            break;
-        }
-
-        if (std.mem.startsWith(u8, line, "Content-Length:")) {
-            const value_start = std.mem.indexOf(u8, line, ":").? + 1;
-            const value = std.mem.trim(u8, line[value_start..], " \r\n\t");
-            content_length = try std.fmt.parseInt(usize, value, 10);
-        }
-    }
-
-    if (content_length == null) {
-        return error.MissingContentLength;
-    }
-
-    // Read message body
-    const message_buffer = try allocator.alloc(u8, content_length.?);
-    defer allocator.free(message_buffer);
-
-    const bytes_read = try reader.readAll(message_buffer);
-    if (bytes_read != content_length.?) {
-        return error.IncompleteRead;
-    }
-
-    // Parse JSON
-    return try json.parseFromSlice(json.Value, allocator, message_buffer, .{});
-}
-
-fn handleMessage(context: *MessageContext, message: json.Value) !void {
+fn handleMessage(context: *LspContext, message: json.Value) !void {
     const msg_obj = message.object;
+
+    // Handle shutdown request before sending exit notification
+    if (msg_obj.get("id")) |id| {
+        if (context.shutdown_requested and id.integer == context.shutdown_id) {
+            std.log.debug("[CLIENT] Shutdown acknowledged by server, sending exit.", .{});
+            try sendExit(context);
+            return error.Failure;
+        }
+    }
+
+    // TODO: Come up with better handling
     if (msg_obj.get("result")) |result| {
         if (!context.initialized) {
-            context.server_capabilities = result;
+            std.log.debug("Handling initialization result: {}", .{result});
             context.initialized = true;
 
+            var diagnostics_supported = false;
+            // TODO: Improve diagnostics supported check
             if (result.object.get("capabilities")) |capabilities| {
                 if (capabilities.object.get("textDocumentSync") != null or
                     capabilities.object.get("diagnosticProvider") != null)
                 {
-                    context.diagnostics_supported = true;
+                    diagnostics_supported = true;
                 }
             }
+            // if (!diagnostics_supported) {
+            //     std.log.debug("[CLIENT] Shutdown since diagnostics are not supported.", .{});
+            //     try sendExit(context);
+            //     return error.Failure;
+            // }
 
-            std.log.info("Server initialized, diagnostics supported: {}", .{context.diagnostics_supported});
-
+            std.log.debug("[CLIENT] Server initialized, diagnostics supported: {}", .{diagnostics_supported});
             try sendNotification(context, "initialized", json.Value{
                 .object = json.ObjectMap.init(context.allocator),
             });
-            try openAllFiles(context);
         }
     }
 
-    // Handle diagnostic notifications
     if (msg_obj.get("method")) |method| {
         if (std.mem.eql(u8, method.string, "textDocument/publishDiagnostics")) {
             if (msg_obj.get("params")) |params| {
                 try handleDiagnostics(context, params);
-                context.diagnostics_received += 1;
+            }
+        } else if (std.mem.eql(u8, method.string, "window/logMessage")) {
+            if (msg_obj.get("params")) |params| {
+                std.log.debug("[SERVER] {s}", .{params.object.get("message").?.string});
             }
         }
     }
 }
 
-fn handleDiagnostics(context: *MessageContext, params: json.Value) !void {
-    _ = context;
+fn handleDiagnostics(context: *LspContext, params: json.Value) !void {
     const params_obj = params.object;
     const uri = params_obj.get("uri").?.string;
     const diagnostics_array = params_obj.get("diagnostics").?.array;
@@ -214,12 +249,13 @@ fn handleDiagnostics(context: *MessageContext, params: json.Value) !void {
             message_text,
         });
     }
+    context.diagnostics_received = true;
 }
 
-fn openAllFiles(context: *MessageContext) !void {
+fn openAllFiles(context: *LspContext) !void {
     for (context.files.items) |file_path| {
         const file_content = std.fs.cwd().readFileAlloc(context.allocator, file_path, 10 * 1024 * 1024) catch |err| {
-            std.log.err("Failed to read file {s}: {}", .{ file_path, err });
+            std.log.err("[CLIENT] Failed to read file {s}: {}", .{ file_path, err });
             continue;
         };
         defer context.allocator.free(file_content);
@@ -228,7 +264,7 @@ fn openAllFiles(context: *MessageContext) !void {
 
         var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
         const cwd = std.posix.getcwd(&cwd_buf) catch {
-            std.log.err("Failed to get current working directory", .{});
+            std.log.err("[CLIENT] Failed to get current working directory", .{});
             continue;
         };
 
@@ -241,14 +277,14 @@ fn openAllFiles(context: *MessageContext) !void {
         const file_uri = try std.fmt.allocPrint(context.allocator, "file://{s}", .{absolute_path});
         defer context.allocator.free(file_uri);
 
+        std.log.debug("[CLIENT] Opening file: {s}", .{file_path});
         try sendDidOpen(context, file_uri, language_id, file_content);
         context.files_opened += 1;
-
-        std.log.debug("Opened file: {s}", .{file_path});
     }
 }
 
-fn sendInitialize(context: *MessageContext) !void {
+fn sendInitialize(context: *LspContext) !void {
+    std.log.debug("[CLIENT] Sending initialize request", .{});
     var arena = std.heap.ArenaAllocator.init(context.allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
@@ -283,7 +319,7 @@ fn sendInitialize(context: *MessageContext) !void {
     try sendRequest(context, "initialize", json.Value{ .object = params });
 }
 
-fn sendDidOpen(context: *MessageContext, uri: []const u8, language_id: []const u8, text: []const u8) !void {
+fn sendDidOpen(context: *LspContext, uri: []const u8, language_id: []const u8, text: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(context.allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
@@ -300,7 +336,7 @@ fn sendDidOpen(context: *MessageContext, uri: []const u8, language_id: []const u
     try sendNotification(context, "textDocument/didOpen", json.Value{ .object = params });
 }
 
-fn sendRequest(context: *MessageContext, method: []const u8, params: json.Value) !void {
+fn sendRequest(context: *LspContext, method: []const u8, params: json.Value) !void {
     var arena = std.heap.ArenaAllocator.init(context.allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
@@ -316,7 +352,7 @@ fn sendRequest(context: *MessageContext, method: []const u8, params: json.Value)
     try sendJsonRpc(context, json.Value{ .object = request });
 }
 
-fn sendNotification(context: *MessageContext, method: []const u8, params: json.Value) !void {
+fn sendNotification(context: *LspContext, method: []const u8, params: json.Value) !void {
     var arena = std.heap.ArenaAllocator.init(context.allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
@@ -329,7 +365,7 @@ fn sendNotification(context: *MessageContext, method: []const u8, params: json.V
     try sendJsonRpc(context, json.Value{ .object = notification });
 }
 
-fn sendShutdown(context: *MessageContext) !void {
+fn sendShutdown(context: *LspContext) !void {
     var arena = std.heap.ArenaAllocator.init(context.allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
@@ -339,12 +375,13 @@ fn sendShutdown(context: *MessageContext) !void {
     try request.put("id", json.Value{ .integer = message_id });
     try request.put("method", json.Value{ .string = "shutdown" });
 
+    context.shutdown_id = message_id;
     message_id += 1;
 
     try sendJsonRpc(context, json.Value{ .object = request });
 }
 
-fn sendExit(context: *MessageContext) !void {
+fn sendExit(context: *LspContext) !void {
     var arena = std.heap.ArenaAllocator.init(context.allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
@@ -356,7 +393,7 @@ fn sendExit(context: *MessageContext) !void {
     try sendJsonRpc(context, json.Value{ .object = notification });
 }
 
-fn sendJsonRpc(context: *MessageContext, value: json.Value) !void {
+fn sendJsonRpc(context: *LspContext, value: json.Value) !void {
     var arena = std.heap.ArenaAllocator.init(context.allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
