@@ -51,12 +51,10 @@ Silencing the output is possible by redirect standard error to `/dev/null`:
 ```
 
 ## Language servers
-
-| `GH_LSP_SERVER`                      | Diagnostics | Clean exit | Notes |
-|--------------------------------------|-------------|------------|-------|
-| `bash-language-server start`         | No          | Yes        | ❌    |
-| `biome lsp-proxy`                    | No          | No         | ❌    |
-| `gh-actions-language-server --stdio` | No          | No         | ❌    |
+| `GH_LSP_SERVER`                | Diagnostics | Clean exit | Notes |
+|--------------------------------|-------------|------------|-------|
+| `bash-language-server start`   | No          | Yes        |       |
+| `biome lsp-proxy`              | No          | No         |       |
 | `helm_ls serve`                      | No          | No         | ❌    |
 | `lua-language-server`                | Yes         | Yes        | ✅    |
 | `marksman server`                    | No          | No         | ❌    |
